@@ -2,6 +2,7 @@ package soot.jimple.infoflow.solver.sparseSolver;
 
 import java.util.Collection;
 import java.util.Set;
+import java.util.concurrent.atomic.LongAdder;
 import java.util.function.Consumer;
 
 import heros.FlowFunction;
@@ -11,8 +12,10 @@ import soot.Unit;
 import soot.jimple.infoflow.InfoflowConfiguration;
 import soot.jimple.infoflow.data.Abstraction;
 import soot.jimple.infoflow.problems.AbstractInfoflowProblem;
+import soot.jimple.infoflow.solver.CalleeLimitStatistics;
 import soot.jimple.infoflow.solver.executors.InterruptableExecutor;
 import soot.jimple.infoflow.solver.fastSolver.InfoflowSolver;
+import soot.jimple.infoflow.solver.sparseSolver.propagation.AbstractSparsePropagation;
 import soot.jimple.infoflow.solver.sparseSolver.propagation.DensePropagation;
 import soot.jimple.infoflow.solver.sparseSolver.propagation.IPropagationStrategy;
 import soot.jimple.infoflow.solver.sparseSolver.propagation.PreciseSparsePropagation;
@@ -26,6 +29,11 @@ import soot.jimple.toolkits.ide.icfg.BiDiInterproceduralCFG;
  */
 public class SparseInfoflowSolver extends InfoflowSolver {
     private final IPropagationStrategy<Unit, Abstraction, BiDiInterproceduralCFG<Unit, SootMethod>> propagationStrategy;
+
+    // Number of successor statements a dense solver would have visited versus the
+    // number the sparse solver actually scheduled for normal flows
+    private final LongAdder denseNormalSuccessors = new LongAdder();
+    private final LongAdder sparseNormalSuccessors = new LongAdder();
 
     public SparseInfoflowSolver(AbstractInfoflowProblem problem, InterruptableExecutor executor,
                                 InfoflowConfiguration.SparsePropagationStrategy propStrategyOpt) {
@@ -68,7 +76,10 @@ public class SparseInfoflowSolver extends InfoflowSolver {
         if (res != null && !res.isEmpty()) {
             for (Abstraction d3 : res) {
                 // Difference: choose the successor for each abstraction in the outgoing set
-                for (Unit m : propagationStrategy.getSuccsOf(n, d3)) {
+                Collection<Unit> sparseSuccs = propagationStrategy.getSuccsOf(n, d3);
+                denseNormalSuccessors.add(icfg.getSuccsOf(n).size());
+                sparseNormalSuccessors.add(sparseSuccs.size());
+                for (Unit m : sparseSuccs) {
                     if (memoryManager != null && d2 != d3)
                         d3 = memoryManager.handleGeneratedMemoryObject(d2, d3);
                     if (d3 != null)
@@ -97,6 +108,7 @@ public class SparseInfoflowSolver extends InfoflowSolver {
         // for each possible callee
         Collection<SootMethod> callees = icfg.getCalleesOfCallAt(n);
         if (callees != null && !callees.isEmpty()) {
+            CalleeLimitStatistics.recordIfExceeded(n, callees, maxCalleesPerCallSite);
             if (maxCalleesPerCallSite < 0 || callees.size() <= maxCalleesPerCallSite) {
                 callees.stream().filter(m -> m.isConcrete()).forEach(new Consumer<SootMethod>() {
 
@@ -157,6 +169,24 @@ public class SparseInfoflowSolver extends InfoflowSolver {
                 }
             }
         }
+    }
+
+    /**
+     * Gets a human-readable summary of how much work sparsification saved and how
+     * large its cache has become
+     *
+     * @return the statistics summary
+     */
+    public String getSparsificationStatistics() {
+        long dense = denseNormalSuccessors.sum();
+        long sparse = sparseNormalSuccessors.sum();
+        StringBuilder sb = new StringBuilder();
+        sb.append("normal-flow successors scheduled: ").append(sparse).append(" (dense equivalent: ").append(dense)
+                .append(")");
+        if (propagationStrategy instanceof AbstractSparsePropagation)
+            sb.append(", sparse CFG cache entries: ")
+                    .append(((AbstractSparsePropagation) propagationStrategy).getSparseCfgSize());
+        return sb.toString();
     }
 
     // Note: The ReturnFlowFunction depends on the successor to determine whether the return is exceptional or not.

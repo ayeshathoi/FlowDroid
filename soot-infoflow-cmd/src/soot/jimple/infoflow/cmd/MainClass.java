@@ -36,6 +36,7 @@ import soot.jimple.infoflow.android.SetupApplication;
 import soot.jimple.infoflow.android.config.XMLConfigurationParser;
 import soot.jimple.infoflow.android.resources.ARSCFileParser;
 import soot.jimple.infoflow.methodSummary.data.provider.LazySummaryProvider;
+import soot.jimple.infoflow.results.InfoflowResults;
 import soot.jimple.infoflow.methodSummary.taintWrappers.ReportMissingSummaryWrapper;
 import soot.jimple.infoflow.methodSummary.taintWrappers.SummaryTaintWrapper;
 import soot.jimple.infoflow.methodSummary.taintWrappers.TaintWrapperFactory;
@@ -60,6 +61,21 @@ public class MainClass {
 	protected ReportMissingSummaryWrapper reportMissingSummaryWrapper;
 
 	protected Set<String> filesToSkip = new HashSet<>();
+
+	/**
+	 * Exit code used with the fail-on-incomplete option when at least one analysis
+	 * was cut short by a timeout or by running out of memory
+	 */
+	public static final int EXIT_CODE_INCOMPLETE_RESULTS = 3;
+
+	/**
+	 * Suffix of the marker file written next to the output file of an incomplete
+	 * analysis
+	 */
+	public static final String INCOMPLETE_MARKER_SUFFIX = ".INCOMPLETE";
+
+	protected boolean failOnIncomplete = false;
+	protected boolean incompleteResults = false;
 
 	// Files
 	private static final String OPTION_CONFIG_FILE = "c";
@@ -132,6 +148,7 @@ public class MainClass {
 	private static final String OPTION_MAX_CALLEES = "mcs";
 	private static final String OPTION_MAX_JOIN_POINT_ABSTRACTIONS = "mjp";
 	private static final String OPTION_MAX_ABSTRACTION_PATH_LENGTH = "map";
+	private static final String OPTION_FAIL_ON_INCOMPLETE = "fi";
 
 	// Evaluation-specific options
 	private static final String OPTION_ANALYZE_FRAMEWORKS = "ff";
@@ -260,6 +277,8 @@ public class MainClass {
 				"Maximum number of callees per call site; call sites with more callees are skipped (default 75, negative = unlimited)");
 		options.addOption(OPTION_MAX_JOIN_POINT_ABSTRACTIONS, "maxjoinpointabstractions", true,
 				"Maximum number of abstractions kept per join point (default 10, negative = unlimited)");
+		options.addOption(OPTION_FAIL_ON_INCOMPLETE, "failonincomplete", false,
+				"Write a <output>.INCOMPLETE marker file and exit with code 3 if an analysis was cut short by a timeout or by running out of memory");
 		options.addOption(OPTION_MAX_ABSTRACTION_PATH_LENGTH, "maxabstractionpathlength", true,
 				"Maximum length over which an abstraction is propagated (default 100, negative = unlimited)");
 
@@ -278,6 +297,8 @@ public class MainClass {
 	public static void main(String[] args) throws Exception {
 		MainClass main = new MainClass();
 		main.run(args);
+		if (main.failOnIncomplete && main.incompleteResults)
+			System.exit(EXIT_CODE_INCOMPLETE_RESULTS);
 	}
 
 	protected void run(String[] args) throws Exception {
@@ -379,7 +400,8 @@ public class MainClass {
 				analyzer.setTaintWrapper(taintWrapper);
 
 				// Start the data flow analysis
-				analyzer.runInfoflow();
+				InfoflowResults results = analyzer.runInfoflow();
+				checkForIncompleteResults(apkFile, results, config);
 
 				if (reportMissingSummaryWrapper != null) {
 					String file = cmd.getOptionValue(OPTION_MISSING_SUMMARIES_FILE);
@@ -961,6 +983,8 @@ public class MainClass {
 		}
 		if (cmd.hasOption(OPTION_INCREMENTAL_RESULTS))
 			config.setIncrementalResultReporting(true);
+		if (cmd.hasOption(OPTION_FAIL_ON_INCOMPLETE))
+			failOnIncomplete = true;
 		{
 			Integer maxCallees = getIntOption(cmd, OPTION_MAX_CALLEES);
 			if (maxCallees != null)
@@ -975,6 +999,48 @@ public class MainClass {
 			Integer maxLength = getIntOption(cmd, OPTION_MAX_ABSTRACTION_PATH_LENGTH);
 			if (maxLength != null)
 				config.getSolverConfiguration().setMaxAbstractionPathLength(maxLength);
+		}
+	}
+
+	/**
+	 * Checks whether the given analysis was cut short by a timeout or by running
+	 * out of memory. In that case, the reported flows are only a subset of the
+	 * flows of the app. A message is always printed. With the fail-on-incomplete
+	 * option, a marker file is also written next to the output file and the
+	 * process will exit with {@link #EXIT_CODE_INCOMPLETE_RESULTS}.
+	 *
+	 * @param apkFile The APK file that was analyzed
+	 * @param results The results of the analysis, can be null
+	 * @param config  The configuration of the analysis
+	 */
+	protected void checkForIncompleteResults(File apkFile, InfoflowResults results,
+			InfoflowAndroidConfiguration config) {
+		if (results == null)
+			return;
+		boolean oom = results.wasTerminatedOutOfMemory();
+		boolean timeout = results.wasAbortedTimeout();
+		if (!oom && !timeout)
+			return;
+
+		incompleteResults = true;
+		String reason = oom && timeout ? "out of memory and timeout" : oom ? "out of memory" : "timeout";
+		String message = String.format(
+				"INCOMPLETE RESULTS for %s: the analysis was terminated (%s), reported flows are only a subset",
+				apkFile.getName(), reason);
+		logger.error(message);
+		System.err.println(message);
+
+		if (failOnIncomplete) {
+			String outputFile = config.getAnalysisFileConfig().getOutputFile();
+			if (outputFile != null && !outputFile.isEmpty()) {
+				File marker = new File(outputFile + INCOMPLETE_MARKER_SUFFIX);
+				try (java.io.FileWriter writer = new java.io.FileWriter(marker)) {
+					writer.write(message + System.lineSeparator());
+					writer.write("termination state: " + results.getTerminationState() + System.lineSeparator());
+				} catch (IOException e) {
+					System.err.println("Could not write incomplete-results marker file: " + e.getMessage());
+				}
+			}
 		}
 	}
 

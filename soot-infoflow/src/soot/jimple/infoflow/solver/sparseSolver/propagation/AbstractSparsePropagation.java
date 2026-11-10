@@ -169,6 +169,17 @@ public abstract class AbstractSparsePropagation implements IPropagationStrategy<
     }
 
     /**
+     * Gets the number of entries in the sparse control flow graph cache. The cache
+     * is never evicted, so this is a lower bound for the memory that sparsification
+     * itself needs.
+     *
+     * @return the number of cached (node, successors) entries
+     */
+    public int getSparseCfgSize() {
+        return sparseCfg.size();
+    }
+
+    /**
      * Returns the successors of node and caches the result for subsequent calls
      *
      * @param node current node

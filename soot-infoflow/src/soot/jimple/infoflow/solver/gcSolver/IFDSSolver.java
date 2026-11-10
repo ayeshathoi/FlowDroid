@@ -45,6 +45,7 @@ import soot.jimple.infoflow.collect.MyConcurrentHashMap;
 import soot.jimple.infoflow.memory.IMemoryBoundedSolver;
 import soot.jimple.infoflow.memory.ISolverTerminationReason;
 import soot.jimple.infoflow.solver.*;
+import soot.jimple.infoflow.solver.CalleeLimitStatistics;
 import soot.jimple.infoflow.solver.executors.InterruptableExecutor;
 import soot.jimple.infoflow.solver.executors.SetPoolExecutor;
 import soot.jimple.infoflow.solver.fastSolver.FastSolverLinkedNode;
@@ -328,6 +329,7 @@ public class IFDSSolver<N, D extends FastSolverLinkedNode<D, N>, I extends BiDiI
 
 		// for each possible callee
 		Collection<SootMethod> callees = icfg.getCalleesOfCallAt(n);
+		CalleeLimitStatistics.recordIfExceeded(n, callees, maxCalleesPerCallSite);
 		if (maxCalleesPerCallSite < 0 || callees.size() <= maxCalleesPerCallSite) {
 			callees.stream().filter(m -> m.isConcrete()).forEach(new Consumer<SootMethod>() {
 

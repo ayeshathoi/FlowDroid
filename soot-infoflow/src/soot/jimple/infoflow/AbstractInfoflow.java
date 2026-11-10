@@ -138,6 +138,7 @@ import soot.jimple.infoflow.solver.gcSolver.GCSolverPeerGroup;
 import soot.jimple.infoflow.solver.memory.DefaultMemoryManagerFactory;
 import soot.jimple.infoflow.solver.memory.IMemoryManager;
 import soot.jimple.infoflow.solver.memory.IMemoryManagerFactory;
+import soot.jimple.infoflow.solver.CalleeLimitStatistics;
 import soot.jimple.infoflow.solver.sparseSolver.SparseInfoflowSolver;
 import soot.jimple.infoflow.sourcesSinks.definitions.ISourceSinkDefinition;
 import soot.jimple.infoflow.sourcesSinks.definitions.MethodSourceSinkDefinition;
@@ -1263,8 +1264,10 @@ public abstract class AbstractInfoflow implements IInfoflow {
 					initializeIncrementalResultReporting(propagationResults, builder);
 
 				// Solve the main IFDS problem
+				CalleeLimitStatistics.reset();
 				solveIFDSProblem(performanceData, forwardSolver, backwardSolver, additionalSolver,
 						additionalAliasSolver, executor);
+				logSolverStatistics(forwardSolver);
 
 				// Get the result abstractions
 				Set<AbstractionAtSink> res = propagationResults.getResults();
@@ -1760,6 +1763,25 @@ public abstract class AbstractInfoflow implements IInfoflow {
 		default:
 			throw new RuntimeException("Unsupported data flow solver");
 		}
+	}
+
+	/**
+	 * Logs statistics that show where the solver may have lost completeness or
+	 * memory
+	 *
+	 * @param forwardSolver The forward solver
+	 */
+	private void logSolverStatistics(IInfoflowSolver forwardSolver) {
+		if (CalleeLimitStatistics.getSkippedCallSites() > 0)
+			logger.warn(
+					"{} call sites ({} visits) were skipped because they have more callees than the limit of {} "
+							+ "(largest: {} callees). Taints are not propagated into the callees of these call sites.",
+					CalleeLimitStatistics.getSkippedCallSites(), CalleeLimitStatistics.getSkippedVisits(),
+					config.getSolverConfiguration().getMaxCalleesPerCallSite(),
+					CalleeLimitStatistics.getMaxCalleesSeen());
+		if (forwardSolver instanceof SparseInfoflowSolver)
+			logger.info("Sparsification statistics: {}",
+					((SparseInfoflowSolver) forwardSolver).getSparsificationStatistics());
 	}
 
 	protected enum SourceSinkState {

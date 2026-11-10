@@ -44,6 +44,7 @@ import soot.jimple.infoflow.collect.MyConcurrentHashMap;
 import soot.jimple.infoflow.memory.IMemoryBoundedSolver;
 import soot.jimple.infoflow.memory.ISolverTerminationReason;
 import soot.jimple.infoflow.solver.AbstractIFDSSolver;
+import soot.jimple.infoflow.solver.CalleeLimitStatistics;
 import soot.jimple.infoflow.solver.EndSummary;
 import soot.jimple.infoflow.solver.executors.InterruptableExecutor;
 import soot.jimple.infoflow.solver.executors.SetPoolExecutor;
@@ -286,6 +287,7 @@ public class FlowInsensitiveSolver<N extends Unit, D extends FastSolverLinkedNod
 
 		// for each possible callee
 		Collection<SootMethod> callees = icfg.getCalleesOfCallAt(n);
+		CalleeLimitStatistics.recordIfExceeded(n, callees, maxCalleesPerCallSite);
 		if (maxCalleesPerCallSite < 0 || callees.size() <= maxCalleesPerCallSite) {
 			for (SootMethod sCalledProcN : callees) { // still line 14
 				// Early termination check
