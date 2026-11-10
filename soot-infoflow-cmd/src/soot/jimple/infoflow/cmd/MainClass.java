@@ -28,6 +28,7 @@ import soot.jimple.infoflow.InfoflowConfiguration.ImplicitFlowMode;
 import soot.jimple.infoflow.InfoflowConfiguration.LayoutMatchingMode;
 import soot.jimple.infoflow.InfoflowConfiguration.PathBuildingAlgorithm;
 import soot.jimple.infoflow.InfoflowConfiguration.PathReconstructionMode;
+import soot.jimple.infoflow.InfoflowConfiguration.SparsePropagationStrategy;
 import soot.jimple.infoflow.InfoflowConfiguration.StaticFieldTrackingMode;
 import soot.jimple.infoflow.android.InfoflowAndroidConfiguration;
 import soot.jimple.infoflow.android.InfoflowAndroidConfiguration.CallbackAnalyzer;
@@ -123,6 +124,14 @@ public class MainClass {
 	private static final String OPTION_STATIC_FLOW_TRACKING_MODE = "sf";
 	private static final String OPTION_DATA_FLOW_DIRECTION = "dir";
 	private static final String OPTION_GC_SLEEP_TIME = "st";
+	private static final String OPTION_SPARSE_STRATEGY = "sps";
+
+	// Memory and completeness limits
+	private static final String OPTION_MEMORY_THRESHOLD = "mth";
+	private static final String OPTION_INCREMENTAL_RESULTS = "ir";
+	private static final String OPTION_MAX_CALLEES = "mcs";
+	private static final String OPTION_MAX_JOIN_POINT_ABSTRACTIONS = "mjp";
+	private static final String OPTION_MAX_ABSTRACTION_PATH_LENGTH = "map";
 
 	// Evaluation-specific options
 	private static final String OPTION_ANALYZE_FRAMEWORKS = "ff";
@@ -222,7 +231,7 @@ public class MainClass {
 		options.addOption(OPTION_CALLBACK_ANALYZER, "callbackanalyzer", true,
 				"Use the specified callback analyzer (DEFAULT, FAST)");
 		options.addOption(OPTION_DATA_FLOW_SOLVER, "dataflowsolver", true,
-				"Use the specified data flow solver (CONTEXTFLOWSENSITIVE, FLOWINSENSITIVE)");
+				"Use the specified data flow solver (CONTEXTFLOWSENSITIVE, SPARSECONTEXT, FLOWINSENSITIVE, GC, FPC)");
 		options.addOption(OPTION_ALIAS_ALGO, "aliasalgo", true,
 				"Use the specified aliasing algorithm (NONE, FLOWSENSITIVE, PTSBASED, LAZY)");
 		options.addOption(OPTION_CODE_ELIMINATION_MODE, "codeelimination", true,
@@ -239,6 +248,20 @@ public class MainClass {
 				"Specifies the direction of the infoflow analysis (FORWARDS, BACKWARDS)");
 		options.addOption(OPTION_GC_SLEEP_TIME, "gcsleeptime", true,
 				"Specifies the sleep time for path edge collectors in seconds");
+		options.addOption(OPTION_SPARSE_STRATEGY, "sparsestrategy", true,
+				"Propagation strategy of the SPARSECONTEXT solver (DENSE, SIMPLE, PRECISE)");
+
+		// Memory and completeness limits
+		options.addOption(OPTION_MEMORY_THRESHOLD, "memorythreshold", true,
+				"Fraction (0-1) of the tenured-generation heap at which the solvers are terminated (default 0.9)");
+		options.addOption(OPTION_INCREMENTAL_RESULTS, "incrementalresults", false,
+				"Report each result as soon as it is found instead of only after the solver has finished");
+		options.addOption(OPTION_MAX_CALLEES, "maxcallees", true,
+				"Maximum number of callees per call site; call sites with more callees are skipped (default 75, negative = unlimited)");
+		options.addOption(OPTION_MAX_JOIN_POINT_ABSTRACTIONS, "maxjoinpointabstractions", true,
+				"Maximum number of abstractions kept per join point (default 10, negative = unlimited)");
+		options.addOption(OPTION_MAX_ABSTRACTION_PATH_LENGTH, "maxabstractionpathlength", true,
+				"Maximum length over which an abstraction is propagated (default 100, negative = unlimited)");
 
 		// Evaluation-specific options
 		options.addOption(OPTION_ANALYZE_FRAMEWORKS, "analyzeframeworks", false,
@@ -586,12 +609,27 @@ public class MainClass {
 			return DataFlowSolver.ContextFlowSensitive;
 		else if (solver.equalsIgnoreCase("FLOWINSENSITIVE"))
 			return DataFlowSolver.FlowInsensitive;
+		else if (solver.equalsIgnoreCase("SPARSECONTEXT"))
+			return DataFlowSolver.SparseContextFlowSensitive;
 		else if (solver.equalsIgnoreCase("GC"))
 			return DataFlowSolver.GarbageCollecting;
 		else if (solver.equalsIgnoreCase("FPC"))
 			return DataFlowSolver.FineGrainedGC;
 		else {
 			System.err.println(String.format("Invalid data flow solver: %s", solver));
+			throw new AbortAnalysisException();
+		}
+	}
+
+	private static SparsePropagationStrategy parseSparseStrategy(String strategy) {
+		if (strategy.equalsIgnoreCase("DENSE"))
+			return SparsePropagationStrategy.Dense;
+		else if (strategy.equalsIgnoreCase("SIMPLE"))
+			return SparsePropagationStrategy.Simple;
+		else if (strategy.equalsIgnoreCase("PRECISE"))
+			return SparsePropagationStrategy.Precise;
+		else {
+			System.err.println(String.format("Invalid sparse propagation strategy: %s", strategy));
 			throw new AbortAnalysisException();
 		}
 	}
@@ -902,6 +940,41 @@ public class MainClass {
 			if (sleepTime != null) {
 				config.getSolverConfiguration().setSleepTime(sleepTime);
 			}
+		}
+		{
+			String sparseStrategy = cmd.getOptionValue(OPTION_SPARSE_STRATEGY);
+			if (sparseStrategy != null && !sparseStrategy.isEmpty())
+				config.getSolverConfiguration().setSparsePropagationStrategy(parseSparseStrategy(sparseStrategy));
+		}
+
+		// Memory and completeness limits
+		{
+			String threshold = cmd.getOptionValue(OPTION_MEMORY_THRESHOLD);
+			if (threshold != null && !threshold.isEmpty()) {
+				double value = Double.parseDouble(threshold);
+				if (value <= 0 || value > 1) {
+					System.err.println("The memory threshold must be in the interval (0, 1]");
+					throw new AbortAnalysisException();
+				}
+				config.setMemoryThreshold(value);
+			}
+		}
+		if (cmd.hasOption(OPTION_INCREMENTAL_RESULTS))
+			config.setIncrementalResultReporting(true);
+		{
+			Integer maxCallees = getIntOption(cmd, OPTION_MAX_CALLEES);
+			if (maxCallees != null)
+				config.getSolverConfiguration().setMaxCalleesPerCallSite(maxCallees);
+		}
+		{
+			Integer maxJoin = getIntOption(cmd, OPTION_MAX_JOIN_POINT_ABSTRACTIONS);
+			if (maxJoin != null)
+				config.getSolverConfiguration().setMaxJoinPointAbstractions(maxJoin);
+		}
+		{
+			Integer maxLength = getIntOption(cmd, OPTION_MAX_ABSTRACTION_PATH_LENGTH);
+			if (maxLength != null)
+				config.getSolverConfiguration().setMaxAbstractionPathLength(maxLength);
 		}
 	}
 
